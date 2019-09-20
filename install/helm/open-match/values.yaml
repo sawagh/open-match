@@ -96,23 +96,36 @@ image:
 
 # Specifies the supported customizable indices per Match
 ticketIndices:
-- char.cleric
-- char.knight
-- char.paladin
-- map.aleroth
-- map.oasis
-- mmr.rating
-- mode.battleroyale
-- mode.ctf
-- mode.demo
-- region.europe-east1
-- region.europe-west1
-- region.europe-west2
-- region.europe-west3
-- region.europe-west4
-- role.dps
-- role.support
-- role.tank
+- region.europe0
+- region.europe1
+- region.europe2
+- region.europe3
+- region.europe4
+- region.europe5
+- region.europe6
+- region.europe7
+- region.europe8
+- region.europe9
+- platform.pc
+- platform.xbox
+- platform.ps
+- platform.nintendo
+- platform.any
+- mmr.playlist1
+- mmr.playlist2
+- mmr.playlist3
+- mmr.playlist4
+- mmr.playlist5
+- mmr.playlist6
+- mmr.playlist7
+- mmr.playlist8
+- mmr.playlist9
+- mmr.playlist10
+- mmr.playlist11
+- mmr.playlist12
+- mmr.playlist13
+- mmr.playlist14
+- mmr.playlist15
 
 # Specifies the location and name of the Open Match application-level config volumes.
   # Used in template: `openmatch.volumemounts.configs` and `openmatch.volumes.configs` under `templates/_helpers.tpl` file.

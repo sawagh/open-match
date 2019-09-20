@@ -65,12 +65,13 @@ func (s *mmlogicService) QueryTickets(req *pb.QueryTicketsRequest, responseServe
 
 func doQueryTickets(ctx context.Context, pool *pb.Pool, pageSize int, sender func(tickets []*pb.Ticket) error, store statestore.Service) error {
 	// Send requests to the storage service
+	// 	startTime := time.Now()
 	err := store.FilterTickets(ctx, pool, pageSize, sender)
 	if err != nil {
 		logger.WithError(err).Error("Failed to retrieve result from storage service.")
 		return err
 	}
-
+	// logger.Infof("doQueryTickets completed in %v", time.Since(startTime))
 	return nil
 }
 

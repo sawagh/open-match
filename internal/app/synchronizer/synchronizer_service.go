@@ -77,7 +77,7 @@ func (s *synchronizerService) Register(ctx context.Context, req *ipb.RegisterReq
 	syncState.cycleData.idToRequestData[id] = &requestData{}
 	logger.WithFields(logrus.Fields{
 		"id": id,
-	}).Info("Registered request for synchronization")
+	}).Info("Registered request for synchronization. Total registered :v", len(syncState.cycleData.idToRequestData))
 	return &ipb.RegisterResponse{Id: id}, nil
 }
 
@@ -107,6 +107,10 @@ func (s *synchronizerService) EvaluateProposals(stream ipb.Synchronizer_Evaluate
 
 		proposals = append(proposals, req.GetMatch())
 	}
+
+	logger.WithFields(logrus.Fields{
+		"id": id,
+	}).Info("Received proposals for evaluation")
 
 	results, err := s.doEvaluateProposals(stream.Context(), proposals, id)
 	if err != nil {

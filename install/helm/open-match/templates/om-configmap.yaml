@@ -75,8 +75,8 @@ data:
 
     synchronizer:
       enabled: true
-      registrationIntervalMs: 3000ms
-      proposalCollectionIntervalMs: 2000ms
+      registrationIntervalMs: 10000ms
+      proposalCollectionIntervalMs: 20000ms
 
     storage:
       page:
@@ -90,7 +90,7 @@ data:
       passwordPath: {{ .Values.redis.secretMountPath }}/redis-password
 {{- end }}
       pool:
-        maxIdle: 3
+        maxIdle: 10000
         maxActive: 0
         idleTimeout: 60s
         healthCheckTimeout: 100ms
