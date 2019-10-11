@@ -91,7 +91,7 @@ func newRedis(cfg config.View) Service {
 				return nil, ctx.Err()
 			}
 
-			return redis.DialURL(redisURL, redis.DialConnectTimeout(idleTimeout, redis.DialReadTimeout(idleTimeout)))
+			return redis.DialURL(redisURL, redis.DialConnectTimeout(cfg.GetDuration("redis.pool.idleTimeout")), redis.DialReadTimeout(cfg.GetDuration("redis.pool.idleTimeout")))
 		},
 	}
 
@@ -427,7 +427,7 @@ func (rb *redisBackend) DeindexTicket(ctx context.Context, id string) error {
 func (rb *redisBackend) FilterTickets(ctx context.Context, pool *pb.Pool, pageSize int, callback func([]*pb.Ticket) error) error {
 	var err error
 	var redisConn redis.Conn
-	var ticketBytes [][]byte
+	// var ticketBytes [][]byte
 	var idsInFilter, idsInIgnoreLists []string
 	uuid := xid.New().String()
 	startTime := time.Now()
@@ -485,30 +485,41 @@ func (rb *redisBackend) FilterTickets(ctx context.Context, pool *pb.Pool, pageSi
 	// TODO: finish reworking this after the proto changes.
 	// fetchAllticketsStartTime := time.Now()
 	for _, page := range idsToPages(idSet, pageSize) {
-		ticketBytes, err = redis.ByteSlices(redisConn.Do("MGET", page...))
-		if err != nil {
-			redisLogger.WithFields(logrus.Fields{
-				"Command": fmt.Sprintf("MGET %v", page),
-			}).WithError(err).Error("Failed to lookup tickets.")
-			return status.Errorf(codes.Internal, "%v", err)
-		}
+		/*
+			ticketBytes, err = redis.ByteSlices(redisConn.Do("MGET", page...))
+			if err != nil {
+				redisLogger.WithFields(logrus.Fields{
+					"Command": fmt.Sprintf("MGET %v", page),
+				}).WithError(err).Error("Failed to lookup tickets.")
+				return status.Errorf(codes.Internal, "%v", err)
+			}
+
+			tickets := make([]*pb.Ticket, 0, len(page))
+			for i, b := range ticketBytes {
+				// Tickets may be deleted by the time we read it from redis.
+				if b != nil {
+					t := &pb.Ticket{}
+					err = proto.Unmarshal(b, t)
+					if err != nil {
+						redisLogger.WithFields(logrus.Fields{
+							"key": page[i],
+						}).WithError(err).Error("Failed to unmarshal ticket from redis.")
+						return status.Errorf(codes.Internal, "%v", err)
+					}
+					tickets = append(tickets, t)
+				}
+			}
+
+		*/
 
 		tickets := make([]*pb.Ticket, 0, len(page))
-		for i, b := range ticketBytes {
-			// Tickets may be deleted by the time we read it from redis.
-			if b != nil {
-				t := &pb.Ticket{}
-				err = proto.Unmarshal(b, t)
-				if err != nil {
-					redisLogger.WithFields(logrus.Fields{
-						"key": page[i],
-					}).WithError(err).Error("Failed to unmarshal ticket from redis.")
-					return status.Errorf(codes.Internal, "%v", err)
-				}
-				tickets = append(tickets, t)
+		for _, tid := range page {
+			t := &pb.Ticket{
+				Id: fmt.Sprintf("%s", tid),
 			}
-		}
 
+			tickets = append(tickets, t)
+		}
 		err = callback(tickets)
 		if err != nil {
 			return status.Errorf(codes.Internal, "%v", err)
