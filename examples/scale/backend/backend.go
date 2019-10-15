@@ -24,7 +24,10 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"open-match.dev/open-match/examples/scale/profiles"
+	"open-match.dev/open-match/examples/scale/tickets"
 	"open-match.dev/open-match/internal/config"
 	"open-match.dev/open-match/internal/logging"
 	"open-match.dev/open-match/internal/rpc"
@@ -72,15 +75,56 @@ func Run() {
 
 	// The buffered channels attempt to decouple fetch, assign and delete. It is
 	// best effort and these operations may still block each other if buffers are full.
-	matches := make(chan *pb.Match, 1000)
-	deleteIds := make(chan string, 1000)
+	matches := make(chan *pb.Match, 10000)
+	// deleteIds := make(chan string, 10000)
+	time.Sleep(time.Second * 60)
 
-	go doFetch(cfg, be, matches)
-	go doAssign(be, matches, deleteIds)
-	go doDelete(fe, deleteIds)
+	// go doAssign(be, matches, deleteIds)
+	// go doDelete(fe, deleteIds)
 
-	// The above goroutines run forever and so the main goroutine needs to block.
+	// for {
+	logger.Infof("Creating Tickets")
+	doCreate(fe)
+
+	logger.Infof("Fetching Matches")
+	doFetch(cfg, be, matches)
+	logger.Infof("Successfully fetched Matches")
+	// }
 	select {}
+
+}
+
+func doCreate(fe pb.FrontendClient) {
+	var created uint64
+	var failed uint64
+	start := time.Now()
+	for created < 1000 {
+		var wg sync.WaitGroup
+		for i := 0; i < 500; i++ {
+			wg.Add(1)
+			go func(wg *sync.WaitGroup) {
+				defer wg.Done()
+				req := &pb.CreateTicketRequest{
+					Ticket: tickets.PlaylistTicket(),
+				}
+
+				if _, err := fe.CreateTicket(context.Background(), req); err != nil {
+					logger.WithFields(logrus.Fields{
+						"error": err.Error(),
+					}).Error("failed to create a ticket.")
+					atomic.AddUint64(&failed, 1)
+					time.Sleep(time.Second * 1)
+					return
+				}
+
+				atomic.AddUint64(&created, 1)
+			}(&wg)
+		}
+
+		// Wait for all concurrent creates to complete.
+		wg.Wait()
+		logger.Infof("%v tickets created, %v failed in %v", created, failed, time.Since(start))
+	}
 }
 
 // doFetch continuously fetches all profiles in a loop and queues up the fetched
@@ -88,52 +132,61 @@ func Run() {
 func doFetch(cfg config.View, be pb.BackendClient, matches chan *pb.Match) {
 	startTime := time.Now()
 	mprofiles := profiles.Generate(cfg)
-	for {
-		var wg sync.WaitGroup
-		for _, p := range mprofiles {
-			wg.Add(1)
-			p := p
-			go func(wg *sync.WaitGroup) {
-				defer wg.Done()
-				fetch(be, p, matches)
-			}(&wg)
-		}
-
-		// Wait for all FetchMatches calls to complete before proceeding.
-		wg.Wait()
-		logger.Infof("FetchedMatches:%v, AssignedTickets:%v, DeletedTickets:%v in time %v", atomic.LoadUint64(&matchCount), atomic.LoadUint64(&assigned), atomic.LoadUint64(&deleted), time.Since(startTime))
+	logger.Infof("Total number of profiles to fetch: %v", len(mprofiles))
+	time.Sleep(time.Second * 1)
+	var wg sync.WaitGroup
+	for i, p := range mprofiles {
+		wg.Add(1)
+		p := p
+		go func(wg *sync.WaitGroup, i int) {
+			defer wg.Done()
+			fetch(be, p, matches, i)
+		}(&wg, i)
 	}
+
+	// Wait for all FetchMatches calls to complete before proceeding.
+	wg.Wait()
+	logger.Infof("FetchedMatches:%v, AssignedTickets:%v, DeletedTickets:%v in time %v, Total profiles: %v", atomic.LoadUint64(&matchCount), atomic.LoadUint64(&assigned), atomic.LoadUint64(&deleted), time.Since(startTime), len(mprofiles))
 }
 
-func fetch(be pb.BackendClient, p *pb.MatchProfile, matches chan *pb.Match) {
-	req := &pb.FetchMatchesRequest{
-		Config: &pb.FunctionConfig{
-			Host: "om-function",
-			Port: 50502,
-			Type: pb.FunctionConfig_GRPC,
-		},
-		Profiles: []*pb.MatchProfile{p},
-	}
-
-	stream, err := be.FetchMatches(context.Background(), req)
-	if err != nil {
-		logger.Errorf("FetchMatches failed, got %v", err)
-		return
-	}
-
+func fetch(be pb.BackendClient, p *pb.MatchProfile, matches chan *pb.Match, i int) {
 	for {
-		resp, err := stream.Recv()
-		if err == io.EOF {
-			return
+		failed := 0
+		startTime := time.Now()
+		req := &pb.FetchMatchesRequest{
+			Config: &pb.FunctionConfig{
+				Host: "om-function",
+				Port: 50502,
+				Type: pb.FunctionConfig_GRPC,
+			},
+			Profiles: []*pb.MatchProfile{p},
 		}
 
+		stream, err := be.FetchMatches(context.Background(), req)
 		if err != nil {
-			logger.Errorf("FetchMatches failed, got %v", err)
-			return
+			//logger.Errorf("FetchMatches for profile[%v]:%v failed, got %v", p.Name, i, err)
+			failed++
+			time.Sleep(time.Second * 1)
+			startTime = time.Now()
+			continue
 		}
 
-		matches <- resp.GetMatch()
-		atomic.AddUint64(&matchCount, 1)
+		for {
+			resp, err := stream.Recv()
+			if err == io.EOF {
+				logger.Infof("Fetched matches for profile[%v]:%v in time %v (Failed %v times)", i, p.Name, time.Since(startTime), failed)
+				return
+			}
+
+			if err != nil {
+				failed++
+				// logger.Errorf("FetchMatches for profile[%v]:%v failed, got %v", p.Name, i, err)
+				return
+			}
+
+			matches <- resp.GetMatch()
+			atomic.AddUint64(&matchCount, 1)
+		}
 	}
 }
 
@@ -180,4 +233,12 @@ func doDelete(fe pb.FrontendClient, deleteIds chan string) {
 
 		atomic.AddUint64(&deleted, 1)
 	}
+}
+
+func unavailable(err error) bool {
+	if status.Convert(err).Code() == codes.Unavailable {
+		return true
+	}
+
+	return false
 }

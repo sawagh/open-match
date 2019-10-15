@@ -364,8 +364,20 @@ install-scale-chart: build/toolchain/bin/helm$(EXE_EXTENSION) install/helm/open-
 		--set open-match-customize.enabled=true \
 		--set open-match-customize.function.image=openmatch-mmf-go-rosterbased\
 		--set global.telemetry.grafana.enabled=true \
-		--set global.telemetry.jaeger.enabled=true \
+		--set global.telemetry.jaeger.enabled=false \
 		--set global.telemetry.prometheus.enabled=true \
+		--set open-match-scale.enabled=false \
+		--set global.logging.rpc.enabled=false \
+		--set global.gcpProjectId=$(GCP_PROJECT_ID)
+	$(HELM) upgrade $(OPEN_MATCH_RELEASE_NAME)-scale --install --wait --debug install/helm/open-match \
+		--timeout=600 \
+		--namespace=$(OPEN_MATCH_KUBERNETES_NAMESPACE) \
+		--set global.image.registry=$(REGISTRY) \
+		--set global.image.tag=$(TAG) \
+		--set open-match-core.enabled=false \
+		--set open-match-telemetry.enabled=false \
+		--set open-match-demo.enabled=false \
+		--set open-match-customize.enabled=false \
 		--set open-match-scale.enabled=true \
 		--set global.logging.rpc.enabled=false \
 		--set global.gcpProjectId=$(GCP_PROJECT_ID)

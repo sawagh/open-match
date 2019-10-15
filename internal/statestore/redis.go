@@ -133,6 +133,8 @@ func (rb *redisBackend) connect(ctx context.Context) (redis.Conn, error) {
 	}
 	telemetry.IncrementCounterN(ctx, mRedisConnLatencyMs, time.Since(startTime).Milliseconds())
 
+	redisLogger.Infof("Connected after %v, stats: %#v", time.Since(startTime), rb.redisPool.Stats())
+
 	return redisConn, nil
 }
 
