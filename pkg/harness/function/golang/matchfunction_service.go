@@ -18,6 +18,7 @@ package golang
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/golang/protobuf/ptypes/any"
 	"github.com/sirupsen/logrus"
@@ -72,11 +73,14 @@ type MatchFunctionParams struct {
 
 // Run is this harness's implementation of the gRPC call defined in api/matchfunction.proto.
 func (s *matchFunctionService) Run(req *pb.RunRequest, stream pb.MatchFunction_RunServer) error {
+	startTime := time.Now()
 	poolNameToTickets, err := s.getMatchManifest(stream.Context(), req)
 	if err != nil {
 		return err
 	}
 
+	logger.Infof("Hydrating all tickets for profile %v took %v", req.GetProfile().GetName, time.Since(startTime))
+	funcStartTime := time.Now()
 	// The matchfunction takes in some half-filled/empty rosters, a property bag, and a map[poolNames]tickets to generate match proposals
 	mfParams := &MatchFunctionParams{
 		Logger: logrus.WithFields(logrus.Fields{
@@ -88,6 +92,7 @@ func (s *matchFunctionService) Run(req *pb.RunRequest, stream pb.MatchFunction_R
 		Rosters:           req.GetProfile().GetRosters(),
 		PoolNameToTickets: poolNameToTickets,
 	}
+
 	// Run the customize match function!
 	proposals, err := s.function(mfParams)
 	if err != nil {
@@ -97,6 +102,7 @@ func (s *matchFunctionService) Run(req *pb.RunRequest, stream pb.MatchFunction_R
 		"proposals": proposals,
 	}).Trace("proposals returned by match function")
 
+	logger.Infof("Match function returned proposals for profile %v in %v", req.GetProfile().GetName, time.Since(funcStartTime))
 	for _, proposal := range proposals {
 		if err := stream.Send(&pb.RunResponse{Proposal: proposal}); err != nil {
 			return err

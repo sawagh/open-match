@@ -98,7 +98,7 @@ func doCreate(fe pb.FrontendClient) {
 	var created uint64
 	var failed uint64
 	start := time.Now()
-	for created < 1000 {
+	for created < 3000 {
 		var wg sync.WaitGroup
 		for i := 0; i < 500; i++ {
 			wg.Add(1)

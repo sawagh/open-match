@@ -352,7 +352,7 @@ install-chart: install-chart-prerequisite build/toolchain/bin/helm$(EXE_EXTENSIO
 		--set global.image.tag=$(TAG) \
 		--set global.gcpProjectId=$(GCP_PROJECT_ID)
 
-install-scale-chart: build/toolchain/bin/helm$(EXE_EXTENSION) install/helm/open-match/secrets/
+install-scale-chart: install-chart-prerequisite build/toolchain/bin/helm$(EXE_EXTENSION) install/helm/open-match/secrets/
 	$(HELM) upgrade $(OPEN_MATCH_RELEASE_NAME) --install --wait --debug install/helm/open-match \
 		--timeout=600 \
 		--namespace=$(OPEN_MATCH_KUBERNETES_NAMESPACE) \
@@ -730,6 +730,9 @@ internal/ipb/synchronizer.pb.go: pkg/pb/messages.pb.go
 build: assets
 	$(GO) build ./...
 	$(GO) build -tags e2ecluster ./...
+
+testprofiles:
+	$(GO) test examples/scale/scale/profile
 
 test: $(ALL_PROTOS) tls-certs third_party/
 	$(GO) test -cover -test.count $(GOLANG_TEST_COUNT) -race ./...

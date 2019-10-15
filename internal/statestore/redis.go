@@ -18,11 +18,13 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"sync/atomic"
 	"time"
 
 	"github.com/cenkalti/backoff"
 	"github.com/golang/protobuf/proto"
 	"github.com/gomodule/redigo/redis"
+	"github.com/rs/xid"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -44,6 +46,7 @@ type redisBackend struct {
 	healthCheckPool *redis.Pool
 	redisPool       *redis.Pool
 	cfg             config.View
+	openConn        uint64
 }
 
 // Close the connection to the database.
@@ -75,18 +78,25 @@ func newRedis(cfg config.View) Service {
 
 	redisLogger.WithField("redisURL", maskedURL).Debug("Attempting to connect to Redis")
 
+	maxIdle := cfg.GetInt("redis.pool.maxIdle")
+	maxActive := cfg.GetInt("redis.pool.maxActive")
+	idleTimeout := cfg.GetDuration("redis.pool.idleTimeout")
+
+	redisLogger.Infof("MaxIdle: %v, maxActive: %v, idleTimeout: %v", maxIdle, maxActive, idleTimeout)
 	pool := &redis.Pool{
-		MaxIdle:     cfg.GetInt("redis.pool.maxIdle"),
-		MaxActive:   cfg.GetInt("redis.pool.maxActive"),
-		IdleTimeout: cfg.GetDuration("redis.pool.idleTimeout"),
+		MaxIdle:     maxIdle,
+		MaxActive:   maxActive,
+		IdleTimeout: idleTimeout,
 		Wait:        true,
 		DialContext: func(ctx context.Context) (redis.Conn, error) {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
+
 			return redis.DialURL(redisURL, redis.DialConnectTimeout(cfg.GetDuration("redis.pool.idleTimeout")), redis.DialReadTimeout(cfg.GetDuration("redis.pool.idleTimeout")))
 		},
 	}
+
 	healthCheckPool := &redis.Pool{
 		MaxIdle:     1,
 		MaxActive:   2,
@@ -109,11 +119,14 @@ func newRedis(cfg config.View) Service {
 
 // HealthCheck indicates if the database is reachable.
 func (rb *redisBackend) HealthCheck(ctx context.Context) error {
+	startTime := time.Now()
 	redisConn, err := rb.healthCheckPool.GetContext(ctx)
 	if err != nil {
 		return status.Errorf(codes.Unavailable, "%v", err)
 	}
-	defer handleConnectionClose(&redisConn)
+	atomic.AddUint64(&rb.openConn, 1)
+	redisLogger.Infof("Connected (Health Pool) after %v, %v open connections", time.Since(startTime), atomic.LoadUint64(&rb.openConn))
+	defer rb.handleConnectionClose(&redisConn)
 	_, err = redisConn.Do("SELECT", "0")
 	// Encountered an issue getting a connection from the pool.
 	if err != nil {
@@ -135,6 +148,8 @@ func (rb *redisBackend) connect(ctx context.Context) (redis.Conn, error) {
 
 	redisLogger.Infof("Connected after %v, stats: %#v", time.Since(startTime), rb.redisPool.Stats())
 
+	atomic.AddUint64(&rb.openConn, 1)
+	redisLogger.Infof("Connected after %v, %v open connections", time.Since(startTime), atomic.LoadUint64(&rb.openConn))
 	return redisConn, nil
 }
 
@@ -144,7 +159,7 @@ func (rb *redisBackend) CreateTicket(ctx context.Context, ticket *pb.Ticket) err
 	if err != nil {
 		return err
 	}
-	defer handleConnectionClose(&redisConn)
+	defer rb.handleConnectionClose(&redisConn)
 
 	err = redisConn.Send("MULTI")
 	if err != nil {
@@ -209,7 +224,7 @@ func (rb *redisBackend) GetTicket(ctx context.Context, id string) (*pb.Ticket, e
 	if err != nil {
 		return nil, err
 	}
-	defer handleConnectionClose(&redisConn)
+	defer rb.handleConnectionClose(&redisConn)
 
 	value, err := redis.Bytes(redisConn.Do("GET", id))
 	if err != nil {
@@ -260,7 +275,7 @@ func (rb *redisBackend) DeleteTicket(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	defer handleConnectionClose(&redisConn)
+	defer rb.handleConnectionClose(&redisConn)
 
 	_, err = redisConn.Do("DEL", id)
 	if err != nil {
@@ -281,7 +296,7 @@ func (rb *redisBackend) IndexTicket(ctx context.Context, ticket *pb.Ticket) erro
 	if err != nil {
 		return err
 	}
-	defer handleConnectionClose(&redisConn)
+	defer rb.handleConnectionClose(&redisConn)
 
 	indexedFields := extractIndexedFields(ticket)
 
@@ -347,7 +362,7 @@ func (rb *redisBackend) DeindexTicket(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	defer handleConnectionClose(&redisConn)
+	defer rb.handleConnectionClose(&redisConn)
 
 	indices, err := redis.Strings(redisConn.Do("SMEMBERS", indexCacheName(id)))
 	if err != nil {
@@ -417,15 +432,17 @@ func (rb *redisBackend) DeindexTicket(ctx context.Context, id string) error {
 func (rb *redisBackend) FilterTickets(ctx context.Context, pool *pb.Pool, pageSize int, callback func([]*pb.Ticket) error) error {
 	var err error
 	var redisConn redis.Conn
-	var ticketBytes [][]byte
+	// var ticketBytes [][]byte
 	var idsInFilter, idsInIgnoreLists []string
-
+	uuid := xid.New().String()
+	startTime := time.Now()
+	// redisLogger.Infof("uuid %v Connecting to Redis.. ", uuid)
 	redisConn, err = rb.connect(ctx)
 	if err != nil {
 		return err
 	}
-	defer handleConnectionClose(&redisConn)
-
+	defer rb.handleConnectionClose(&redisConn)
+	redisLogger.Infof("uuid %v FilterTickets: Connected to Redis in %v", uuid, time.Since(startTime))
 	// A set of playerIds that satisfies all filters
 	idSet := make([]string, 0)
 
@@ -434,6 +451,7 @@ func (rb *redisBackend) FilterTickets(ctx context.Context, pool *pb.Pool, pageSi
 		// Time Complexity O(logN + M), where N is the number of elements in the DoubleArg set
 		// and M is the number of entries being returned.
 		// TODO: discuss if we need a LIMIT for # of queries being returned
+		// filterStartTime := time.Now()
 		idsInFilter, err = redis.Strings(redisConn.Do("ZRANGEBYSCORE", filter.name, filter.min, filter.max))
 		if err != nil {
 			redisLogger.WithFields(logrus.Fields{
@@ -447,6 +465,8 @@ func (rb *redisBackend) FilterTickets(ctx context.Context, pool *pb.Pool, pageSi
 		} else {
 			idSet = set.Intersection(idSet, idsInFilter)
 		}
+
+		// redisLogger.Infof("uuid %v Filter %v queried in %v", uuid, filter.name, time.Since(filterStartTime))
 	}
 
 	ttl := rb.cfg.GetDuration("redis.ignoreLists.ttl")
@@ -455,6 +475,7 @@ func (rb *redisBackend) FilterTickets(ctx context.Context, pool *pb.Pool, pageSi
 	startTimeInt := curTime.Add(-ttl).UnixNano()
 
 	// Filter out tickets that are fetched but not assigned within ttl time (ms).
+	// ignoreListStartTIme := time.Now()
 	idsInIgnoreLists, err = redis.Strings(redisConn.Do("ZRANGEBYSCORE", "proposed_ticket_ids", startTimeInt, curTimeInt))
 	if err != nil {
 		redisLogger.WithError(err).Error("failed to get proposed tickets")
@@ -462,33 +483,46 @@ func (rb *redisBackend) FilterTickets(ctx context.Context, pool *pb.Pool, pageSi
 	}
 
 	idSet = set.Difference(idSet, idsInIgnoreLists)
+	// redisLogger.Infof("uuid:%v Checkd ignore list in %v", uuid, time.Since(ignoreListStartTIme))
 
 	// TODO: finish reworking this after the proto changes.
+	// fetchAllticketsStartTime := time.Now()
 	for _, page := range idsToPages(idSet, pageSize) {
-		ticketBytes, err = redis.ByteSlices(redisConn.Do("MGET", page...))
-		if err != nil {
-			redisLogger.WithFields(logrus.Fields{
-				"Command": fmt.Sprintf("MGET %v", page),
-			}).WithError(err).Error("Failed to lookup tickets.")
-			return status.Errorf(codes.Internal, "%v", err)
-		}
+		/*
+			ticketBytes, err = redis.ByteSlices(redisConn.Do("MGET", page...))
+			if err != nil {
+				redisLogger.WithFields(logrus.Fields{
+					"Command": fmt.Sprintf("MGET %v", page),
+				}).WithError(err).Error("Failed to lookup tickets.")
+				return status.Errorf(codes.Internal, "%v", err)
+			}
+
+			tickets := make([]*pb.Ticket, 0, len(page))
+			for i, b := range ticketBytes {
+				// Tickets may be deleted by the time we read it from redis.
+				if b != nil {
+					t := &pb.Ticket{}
+					err = proto.Unmarshal(b, t)
+					if err != nil {
+						redisLogger.WithFields(logrus.Fields{
+							"key": page[i],
+						}).WithError(err).Error("Failed to unmarshal ticket from redis.")
+						return status.Errorf(codes.Internal, "%v", err)
+					}
+					tickets = append(tickets, t)
+				}
+			}
+
+		*/
 
 		tickets := make([]*pb.Ticket, 0, len(page))
-		for i, b := range ticketBytes {
-			// Tickets may be deleted by the time we read it from redis.
-			if b != nil {
-				t := &pb.Ticket{}
-				err = proto.Unmarshal(b, t)
-				if err != nil {
-					redisLogger.WithFields(logrus.Fields{
-						"key": page[i],
-					}).WithError(err).Error("Failed to unmarshal ticket from redis.")
-					return status.Errorf(codes.Internal, "%v", err)
-				}
-				tickets = append(tickets, t)
+		for _, tid := range page {
+			t := &pb.Ticket{
+				Id: fmt.Sprintf("%s", tid),
 			}
-		}
 
+			tickets = append(tickets, t)
+		}
 		err = callback(tickets)
 		if err != nil {
 			return status.Errorf(codes.Internal, "%v", err)
@@ -500,6 +534,8 @@ func (rb *redisBackend) FilterTickets(ctx context.Context, pool *pb.Pool, pageSi
 		}
 	}
 
+	// redisLogger.Infof("uuid:%v - Fetched tickets in %v", uuid, time.Since(fetchAllticketsStartTime))
+	// redisLogger.Infof("uuid:%v - Completed FilterTickets in %v", uuid, time.Since(startTime))
 	return nil
 }
 
@@ -516,7 +552,7 @@ func (rb *redisBackend) UpdateAssignments(ctx context.Context, ids []string, ass
 	if err != nil {
 		return err
 	}
-	defer handleConnectionClose(&redisConn)
+	defer rb.handleConnectionClose(&redisConn)
 
 	err = redisConn.Send("MULTI")
 	if err != nil {
@@ -577,7 +613,7 @@ func (rb *redisBackend) GetAssignments(ctx context.Context, id string, callback 
 	if err != nil {
 		return err
 	}
-	defer handleConnectionClose(&redisConn)
+	defer rb.handleConnectionClose(&redisConn)
 
 	backoffOperation := func() error {
 		var ticket *pb.Ticket
@@ -608,7 +644,7 @@ func (rb *redisBackend) AddTicketsToIgnoreList(ctx context.Context, ids []string
 	if err != nil {
 		return err
 	}
-	defer handleConnectionClose(&redisConn)
+	defer rb.handleConnectionClose(&redisConn)
 
 	err = redisConn.Send("MULTI")
 	if err != nil {
@@ -688,13 +724,14 @@ func idsToPages(ids []string, pageSize int) [][]interface{} {
 	return result
 }
 
-func handleConnectionClose(conn *redis.Conn) {
+func (rb *redisBackend) handleConnectionClose(conn *redis.Conn) {
 	err := (*conn).Close()
 	if err != nil {
 		redisLogger.WithFields(logrus.Fields{
 			"error": err,
 		}).Debug("failed to close redis client connection.")
 	}
+	atomic.AddUint64(&rb.openConn, ^uint64(0))
 }
 
 func (rb *redisBackend) newConstantBackoffStrategy() backoff.BackOff {

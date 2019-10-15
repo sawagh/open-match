@@ -40,7 +40,6 @@ func MakeMatches(p *mmfHarness.MatchFunctionParams) ([]*pb.Match, error) {
 	// have the ticket pools referenced in the roster. It generates matches by
 	// populating players from the specified pools into rosters.
 	startTime := time.Now()
-
 	wantTickets, err := wantPoolTickets(p.Rosters)
 	if err != nil {
 		return nil, err
@@ -100,6 +99,7 @@ func MakeMatches(p *mmfHarness.MatchFunctionParams) ([]*pb.Match, error) {
 	}
 	logger.Infof("Returning %v matches for profile %v in time %v", len(matches), p.ProfileName, time.Since(startTime))
 
+	logger.Infof("Returning %v matches for profile %v in time %v", len(matches), p.ProfileName, time.Since(startTime))
 	return matches, nil
 }
 
