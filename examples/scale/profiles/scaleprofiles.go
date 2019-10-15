@@ -33,6 +33,16 @@ var (
 		"region.europe7",
 		"region.europe8",
 		"region.europe9",
+		"region.europe10",
+		"region.europe11",
+		"region.europe12",
+		"region.europe13",
+		"region.europe14",
+		"region.europe15",
+		"region.europe16",
+		"region.europe17",
+		"region.europe18",
+		"region.europe19",
 	}
 	platforms = []string{
 		"platform.pc",
@@ -57,6 +67,11 @@ var (
 		"mmr.playlist13",
 		"mmr.playlist14",
 		"mmr.playlist15",
+		"mmr.playlist16",
+		"mmr.playlist17",
+		"mmr.playlist18",
+		"mmr.playlist19",
+		"mmr.playlist20",
 	}
 	gameSizeMap = map[string]int{
 		"mmr.playlist1":  4,
@@ -74,6 +89,11 @@ var (
 		"mmr.playlist13": 8,
 		"mmr.playlist14": 8,
 		"mmr.playlist15": 8,
+		"mmr.playlist16": 10,
+		"mmr.playlist17": 10,
+		"mmr.playlist18": 10,
+		"mmr.playlist19": 10,
+		"mmr.playlist20": 10,
 	}
 )
 

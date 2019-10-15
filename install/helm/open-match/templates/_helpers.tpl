@@ -44,8 +44,8 @@ prometheus.io/path: {{ .prometheus.endpoint }}
 imagePullPolicy: {{ .Values.image.pullPolicy }}
 resources:
   requests:
-    memory: 100Mi
-    cpu: 100m
+    memory: 50Mi
+    cpu: 50m
 {{- end -}}
 
 {{- define "openmatch.volumemounts.configs" -}}
@@ -119,6 +119,6 @@ readinessProbe:
 
 {{- define "openmatch.HorizontalPodAutoscaler.spec.common" -}}
 minReplicas: 1
-maxReplicas: 10
+maxReplicas: 20
 targetCPUUtilizationPercentage: 50
 {{- end -}}
